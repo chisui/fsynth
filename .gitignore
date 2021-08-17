@@ -1,0 +1,8 @@
+
+/result
+/dist-newstyle
+/*.cabal
+/.history
+/log*
+.envrc
+
