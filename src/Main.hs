@@ -1,19 +1,21 @@
 module Main where
 
 import Prelude hiding ((.))
-import "base" Data.Tuple
 import "base" Data.Foldable
-import "base" Control.Category
-import "base" Data.IORef
-import "base" Control.Monad
-import "base" Control.Concurrent
 import "base" Data.Int (Int32)
+import "base" Control.Category
+import "base" Control.Monad
+import "base" Data.IORef
+import "base" Control.Concurrent
+import "base" GHC.Stack
+import "stm" Control.Concurrent.STM
 import "dunai" Data.MonadicStreamFunction
 import "dunai" Data.MonadicStreamFunction.Async
+import "dunai" Data.MonadicStreamFunction.ReactHandle
 import "sdl2" SDL qualified
 import "vector" Data.Vector.Storable.Mutable qualified as V
 import "vector" Data.Vector.Unboxed qualified as VU
-import GHC.Stack
+
 
 type (-$>) = MSF IO
 type Time = Double
@@ -55,35 +57,33 @@ devSamples = 4096 * 2
 play :: Time -$> Sample -> IO ()
 play f = do
     SDL.initializeAll
-    buf <- newIORef VU.empty
-    forkIO . reactimate $ (arrM (pushBuffer buf). f . time)
+    queue <- newTBQueueIO 20
+    forkIO $ pushBuffer queue
     (device,_) <- SDL.openAudioDevice SDL.OpenDeviceSpec
         { SDL.openDeviceFreq     = SDL.Mandate devFreq
         , SDL.openDeviceFormat   = SDL.Mandate SDL.Signed32BitNativeAudio
         , SDL.openDeviceChannels = SDL.Mandate SDL.Mono
         , SDL.openDeviceSamples  = devSamples
-        , SDL.openDeviceCallback = popBuffer buf
+        , SDL.openDeviceCallback = popBuffer queue
         , SDL.openDeviceUsage    = SDL.ForPlayback
         , SDL.openDeviceName     = Nothing
         }
     SDL.setAudioDevicePlaybackState device SDL.Play
     pure ()
   where
-    popBuffer :: HasCallStack => IORef (VU.Vector Int32) -> SDL.AudioFormat a -> V.IOVector a -> IO ()
-    popBuffer buf SDL.Signed32BitLEAudio out = do
-        let l = V.length out
-        bytes <- atomicModifyIORef' buf (swap . VU.splitAt l)
-        let l_bytes = VU.length bytes
-        for_ ([0 .. min l l_bytes - 1] :: [Int]) $ \i -> V.write out i (bytes VU.! i)
+    popBuffer :: HasCallStack => TBQueue (VU.Vector Int32) -> SDL.AudioFormat a -> V.IOVector a -> IO ()
+    popBuffer queue SDL.Signed32BitLEAudio out = do
+        bytes <- atomically . readTBQueue $ queue
+        for_ ([0 .. VU.length bytes - 1] :: [Int]) $ \i -> V.write out i (bytes VU.! i)
     popBuffer _ _ _ = error "Unsupported audio format"
-    pushBuffer :: HasCallStack => IORef (VU.Vector Int32) -> Sample -> IO ()
-    pushBuffer buf (Sample s) = do
-            let wait = do
-                    l_buf <- VU.length <$> readIORef buf
-                    if devFreq * 20 <= l_buf then do
-                        threadDelay 50
-                        wait
-                    else pure ()
-            wait
-            modifyIORef buf . mappend . VU.singleton $ s
+    pushBuffer :: HasCallStack => TBQueue (VU.Vector Int32) -> IO ()
+    pushBuffer queue = do
+        buf <- newIORef VU.empty
+        let push (Sample s) = modifyIORef' buf (<> VU.singleton s)
+        handle <- reactInit (arrM push . f . time)
+        forever $ do
+            for_ ([0 .. devSamples - 1] :: [Int]) (const (react handle))
+            bytes <- atomicModifyIORef' buf (VU.empty,)
+            atomically . writeTBQueue queue $ bytes
+
     time = concatS . pure $ (/ devFreq) . fromIntegral <$> [0 :: Int32 ..]

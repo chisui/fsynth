@@ -26,6 +26,7 @@ dependencies:
   # macros
   - template-haskell
   # other
+  - stm
   - dunai
   - sdl2
   
