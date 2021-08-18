@@ -22,15 +22,13 @@ dependencies:
   - containers
   - transformers
   - mtl
-  - bytestring
-  - time
-  - split
-  - binary
+  - vector
   # macros
   - template-haskell
-  # others
-  - sqlite-simple
-
+  # other
+  - dunai
+  - sdl2
+  
 # enable modern Haskell
 default-extensions:
   # quality of live
