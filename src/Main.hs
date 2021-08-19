@@ -7,5 +7,5 @@ import "this" Sound
 
 main :: IO ()
 main = do
-   play (sinwave 440 + sinwave 880)
+   play . level 0.1 $ (sinwave 440 + sinwave 880)
    forever (threadDelay maxBound)
